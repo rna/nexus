@@ -10,6 +10,7 @@ from playwright_stealth import stealth_async
 
 from models import upsert_product, engine, create_db_and_tables
 from sqlmodel import Session
+from user_agents import get_random_user_agent
 
 # --- Configuration ---
 PROXY_URL = os.environ.get("PROXY_URL")
@@ -33,7 +34,7 @@ class Scraper:
         if self.context:
             await self.context.close()
 
-        user_agent = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(90, 110)}.0.0.0 Safari/537.36"
+        user_agent = get_random_user_agent()
         viewport = {
             "width": random.randint(1280, 1920),
             "height": random.randint(720, 1080),
@@ -210,4 +211,3 @@ async def main():
 if __name__ == "__main__":
     # This is for standalone running. In production, you'd call this from your worker.
     asyncio.run(main())
-
