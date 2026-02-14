@@ -5,8 +5,9 @@ import os
 import time
 from typing import Optional, Dict, Any
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright, Error
 from playwright_stealth import stealth_async
+from asyncio import TimeoutError
 
 from models import upsert_product, engine, create_db_and_tables
 from sqlmodel import Session
@@ -173,9 +174,13 @@ class Scraper:
                 
                 print(f"Successfully scraped and saved {product['product_name']}")
                 return
-
+            except (TimeoutError, Error) as e:
+                print(f"Network/Proxy error on attempt {attempt + 1} for {url}: {e}")
+                print("Forcing proxy rotation.")
+                await self.new_context()
+                await asyncio.sleep(random.uniform(0.5, 1.5) + 2 ** attempt) # Exponential backoff with random jitter
             except Exception as e:
-                print(f"Attempt {attempt + 1} failed for {url}: {e}")
+                print(f"An unexpected error occurred on attempt {attempt + 1} for {url}: {e}")
                 await asyncio.sleep(2 ** attempt) # Exponential backoff
             finally:
                 if page:
