@@ -13,7 +13,8 @@ from models import upsert_product, engine, create_db_and_tables
 from sqlmodel.ext.asyncio.session import AsyncSession
 from tasks import (
     get_url_for_processing, mark_url_as_done, push_to_dlq,
-    get_cache, set_cache, r, QUEUE_NAME, PROCESSING_QUEUE_NAME
+    get_cache, set_cache, r, QUEUE_NAME, PROCESSING_QUEUE_NAME,
+    push_urls_to_queue, SEEN_URLS_SET
 )
 from browser_manager import BrowserManager
 import extraction
@@ -215,8 +216,7 @@ async def main():
                 push_to_dlq(url)      # Add to DLQ
 
 if __name__ == "__main__":
-    from tasks import push_url_to_queue
-    if r.llen(QUEUE_NAME) == 0 and r.llen(PROCESSING_QUEUE_NAME) == 0:
-         push_url_to_queue("https://www.sephora.com/product/the-ordinary-deciem-niacinamide-10-zinc-1-P427417")
+    if r.scard(SEEN_URLS_SET) == 0:
+         push_urls_to_queue(["https://www.sephora.com/product/the-ordinary-deciem-niacinamide-10-zinc-1-P427417"])
     
     asyncio.run(main())

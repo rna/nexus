@@ -7,6 +7,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 QUEUE_NAME = "scraping_queue"
 PROCESSING_QUEUE_NAME = "processing_queue"
 DLQ_NAME = "dead_letter_queue"
+SEEN_URLS_SET = "seen_urls"
 
 # Add a timestamp to the URL to track how long it's been processing
 # The URL will be stored as a string: f"{url}::{timestamp}"
@@ -15,9 +16,28 @@ PROCESSING_TIMEOUT = 300 # 5 minutes
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
 
-def push_url_to_queue(url: str):
-    """Pushes a URL to the main scraping queue."""
-    r.lpush(QUEUE_NAME, url)
+def push_urls_to_queue(urls: list[str]) -> int:
+    """
+    Adds a list of URLs to the main scraping queue if they haven't been seen before.
+    Returns the number of new URLs added to the queue.
+    """
+    new_urls = []
+    # SISMEMBER can be slow for very large sets if called one by one.
+    # A Lua script or a pipeline can optimize this. For now, this is clear and functional.
+    for url in urls:
+        if not r.sismember(SEEN_URLS_SET, url):
+            new_urls.append(url)
+    
+    if not new_urls:
+        return 0
+        
+    # Add the new URLs to the queue and the seen set in a transaction
+    with r.pipeline() as pipe:
+        pipe.lpush(QUEUE_NAME, *new_urls)
+        pipe.sadd(SEEN_URLS_SET, *new_urls)
+        pipe.execute()
+        
+    return len(new_urls)
 
 def get_url_for_processing() -> str | None:
     """
