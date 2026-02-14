@@ -1,6 +1,7 @@
 import redis
 import os
 import time
+import json
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 QUEUE_NAME = "scraping_queue"
@@ -58,3 +59,26 @@ def requeue_stale_tasks():
 def push_to_dlq(url: str):
     """Pushes a failed URL to the Dead Letter Queue."""
     r.lpush(DLQ_NAME, url)
+
+# --- Caching Functions ---
+
+CACHE_TTL = 86400 # 24 hours in seconds
+
+def set_cache(url: str, data: dict):
+    """
+    Caches the scraped data for a given URL with a TTL.
+    The key will be prefixed with 'cache:'.
+    """
+    cache_key = f"cache:{url}"
+    r.set(cache_key, json.dumps(data), ex=CACHE_TTL)
+
+def get_cache(url: str) -> dict | None:
+    """
+    Retrieves cached data for a given URL.
+    Returns the data as a dictionary or None if not found.
+    """
+    cache_key = f"cache:{url}"
+    cached_data = r.get(cache_key)
+    if cached_data:
+        return json.loads(cached_data)
+    return None

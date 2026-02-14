@@ -11,7 +11,10 @@ from asyncio import TimeoutError
 
 from models import upsert_product, engine, create_db_and_tables
 from sqlmodel.ext.asyncio.session import AsyncSession
-from tasks import get_url_for_processing, mark_url_as_done, push_to_dlq, r, QUEUE_NAME
+from tasks import (
+    get_url_for_processing, mark_url_as_done, push_to_dlq,
+    get_cache, set_cache, r, QUEUE_NAME, PROCESSING_QUEUE_NAME
+)
 from browser_manager import BrowserManager
 import extraction
 from logger import get_logger
@@ -21,10 +24,10 @@ logger = get_logger(__name__)
 # --- Configuration ---
 PROXY_URL = os.environ.get("PROXY_URL")
 
-async def scrape_product(browser_manager: BrowserManager, url: str) -> bool:
+async def scrape_product(browser_manager: BrowserManager, url: str) -> Optional[Dict[str, Any]]:
     """
     Orchestrates the scraping of a single product page.
-    Returns True on success, False on failure.
+    Returns the extracted product data dict on success, None on failure.
     """
     page = None
     site_config = get_site_config(url)
@@ -62,17 +65,13 @@ async def scrape_product(browser_manager: BrowserManager, url: str) -> bool:
 
             if not product_to_upsert:
                 logger.warning(f"No data extracted for {url}. Skipping.")
-                return True # Consider it "done" as there's nothing more to do
+                return {} # Return empty dict to signify "done, but no data"
 
             if not all([product_to_upsert.get("sku"), product_to_upsert.get("product_name"), product_to_upsert.get("price_amount") is not None]):
                 logger.warning(f"Incomplete data for {url}. Skipping.")
-                return True # Also "done"
+                return {} # Also "done"
 
-            async with AsyncSession(engine) as session:
-                await upsert_product(session, product_to_upsert)
-            
-            logger.info(f"Successfully scraped and saved {product_to_upsert.get('product_name')}")
-            return True # Success
+            return product_to_upsert # Success, return data
         except (TimeoutError, Error) as e:
             logger.warning(f"Network/Proxy error on attempt {attempt + 1} for {url}: {e}")
             logger.info("Forcing proxy rotation.")
@@ -86,7 +85,7 @@ async def scrape_product(browser_manager: BrowserManager, url: str) -> bool:
                 await page.close()
     
     logger.error(f"Failed to scrape {url} after all retries.")
-    return False # Failure
+    return None # Failure
 
 # --- Helper Functions ---
 
@@ -187,21 +186,37 @@ async def main():
                 continue
 
             logger.info(f"Processing URL: {url}")
-            success = await scrape_product(browser_manager, url)
+            
+            # 1. Check cache first
+            cached_data = get_cache(url)
+            if cached_data:
+                logger.info(f"Cache hit for {url}. Processing cached data.")
+                product_data = cached_data
+            else:
+                # 2. If no cache, scrape the product
+                logger.info(f"Cache miss for {url}. Scraping page.")
+                product_data = await scrape_product(browser_manager, url)
 
-            if success:
+            # 3. Process the result
+            if product_data is not None:
+                if product_data: # If data is not an empty dict
+                    # Cache the new result
+                    set_cache(url, product_data)
+                    # Upsert to DB
+                    async with AsyncSession(engine) as session:
+                        await upsert_product(session, product_data)
+                    logger.info(f"Successfully processed and saved {product_data.get('product_name')}")
+                
+                # Mark as done whether data was found or not (empty dict means skip)
                 mark_url_as_done(url)
             else:
-                # Failed after all retries, move from processing to DLQ
+                # Scrape failed after all retries, move from processing to DLQ
                 mark_url_as_done(url) # Remove from processing
                 push_to_dlq(url)      # Add to DLQ
 
 if __name__ == "__main__":
     from tasks import push_url_to_queue
-    # This check is now less useful as items are in processing.
-    # We will assume for testing that if the main queue is empty, we add one.
-    # A better approach would be a separate script to populate the queue.
-    if r.llen(QUEUE_NAME) == 0:
+    if r.llen(QUEUE_NAME) == 0 and r.llen(PROCESSING_QUEUE_NAME) == 0:
          push_url_to_queue("https://www.sephora.com/product/the-ordinary-deciem-niacinamide-10-zinc-1-P427417")
     
     asyncio.run(main())
