@@ -1,0 +1,6 @@
+playwright
+playwright-stealth
+sqlalchemy
+sqlmodel
+psycopg2-binary
+redis

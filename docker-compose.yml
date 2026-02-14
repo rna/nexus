@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    networks:
+      - nexus-network
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - nexus-network
+
+  scraper-worker:
+    build: .
+    container_name: scraper-worker
+    command: python scraper.py
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-nexus}
+      - REDIS_URL=redis://redis:6379
+      - PROXY_URL=${PROXY_URL}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - nexus-network
+
+volumes:
+  postgres_data:
+
+networks:
+  nexus-network:
+    driver: bridge
