@@ -83,6 +83,24 @@ class Scraper:
         await stealth_async(page)
         return page
 
+    async def handle_cookie_banner(self, page: Page):
+        """Looks for and accepts common cookie consent banners."""
+        cookie_selectors = [
+            'button:has-text("Accept")',
+            'button:has-text("Agree")',
+            'button:has-text("OK")',
+            '[id*="consent"] button:has-text("Accept")',
+            '[class*="cookie"] button:has-text("Accept")',
+        ]
+        for selector in cookie_selectors:
+            try:
+                banner_button = page.locator(selector).first
+                await banner_button.click(timeout=2000)
+                print("Clicked cookie banner.")
+                return
+            except (TimeoutError, Error):
+                pass # Button not found or not clickable, try next selector
+
     async def extract_from_json_ld(self, page: Page) -> Optional[Dict[str, Any]]:
         """Extracts product data from JSON-LD scripts."""
         try:
@@ -137,6 +155,9 @@ class Scraper:
                 # Human-like mouse movement and delay after loading
                 await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
                 await asyncio.sleep(random.uniform(0.5, 1.5))
+
+                # Handle cookie banners
+                await self.handle_cookie_banner(page)
 
                 if response.status in [403, 429, 503]:
                     raise Exception(f"Received status {response.status}")
