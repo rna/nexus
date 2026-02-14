@@ -4,6 +4,7 @@ import random
 import os
 import time
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright, Error
 from playwright_stealth import stealth_async
@@ -116,10 +117,27 @@ class Scraper:
             # It's good practice to re-check total height in case of lazy loading
             total_height = await page.evaluate("document.body.scrollHeight")
 
+    def get_site_config(self, url: str) -> Optional[Dict[str, Any]]:
+        """Loads a site-specific configuration file from the 'sites' directory."""
+        try:
+            domain = urlparse(url).netloc
+            # Remove 'www.' if it exists
+            if domain.startswith("www."):
+                domain = domain[4:]
+            
+            config_path = os.path.join("sites", f"{domain}.json")
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            print(f"No configuration file found for {domain}")
+            return None
+        except Exception as e:
+            print(f"Error loading configuration for {url}: {e}")
+            return None
 
     async def extract_from_json_ld(self, page: Page) -> Optional[Dict[str, Any]]:
         """Extracts product data from JSON-LD scripts."""
-        try::
+        try:
             json_ld_element = await page.query_selector('script[type="application/ld+json"]')
             if not json_ld_element:
                 return None
@@ -141,24 +159,26 @@ class Scraper:
             print(f"Could not parse JSON-LD: {e}")
         return None
 
-    def extract_with_css(self, page: Page, selectors: Dict[str, str]) -> Dict[str, Any]:
+    async def extract_with_css(self, page: Page, selectors: Dict[str, str]) -> Dict[str, Any]:
         """Fallback to extract data using CSS selectors."""
-        # This is a placeholder. You will need to implement the actual extraction
-        # logic based on the selectors for a specific site.
-        # For example:
-        # product_data = {
-        #     "product_name": await page.locator(selectors["product_name"]).inner_text(),
-        #     "brand": await page.locator(selectors["brand"]).inner_text(),
-        #     ...
-        # }
-        # return product_data
-        raise NotImplementedError("CSS extraction must be implemented for each site.")
+        product_data = {}
+        for key, selector in selectors.items():
+            try:
+                element = await page.query_selector(selector)
+                if element:
+                    product_data[key] = await element.inner_text()
+            except (TimeoutError, Error) as e:
+                print(f"Could not extract {key} using selector '{selector}': {e}")
+        return product_data
 
-    async def scrape_product(self, url: str, site_selectors: Optional[Dict[str, str]] = None):
+    async def scrape_product(self, url: str):
         """
         Scrapes a single product page.
         """
         page = None
+        site_config = self.get_site_config(url)
+        site_selectors = site_config.get("selectors") if site_config else None
+
         for attempt in range(5): # 5 retries
             try:
                 page = await self.get_page()
@@ -185,41 +205,50 @@ class Scraper:
                 await asyncio.sleep(random.uniform(1, 2))
 
                 product_data_json = await self.extract_from_json_ld(page)
+                product_to_upsert = None
 
                 if product_data_json:
                     print(f"Extracted data from JSON-LD for {url}")
-                    # Normalize JSON-LD data to your DB schema
-                    # This is a simplified example
-                    product = {
-                        "sku": product_data_json.get("sku"),
-                        "brand": product_data_json.get("brand", {}).get("name"),
-                        "product_name": product_data_json.get("name"),
-                        "price_amount": float(product_data_json.get("offers", {}).get("price")),
-                        "currency": product_data_json.get("offers", {}).get("priceCurrency"),
+                    product_to_upsert = {
+                        "sku": product_data_json.get("sku", f"SKU_MISSING_{hash(url)}"),
+                        "brand": product_data_json.get("brand", {}).get("name", "Unknown"),
+                        "product_name": product_data_json.get("name", "Unknown Product"),
+                        "price_amount": float(product_data_json.get("offers", {}).get("price", 0.0)),
+                        "currency": product_data_json.get("offers", {}).get("priceCurrency", "USD"),
                         "availability_status": "InStock" if "InStock" in product_data_json.get("offers", {}).get("availability", "") else "OutOfStock",
-                        "ingredients_list": ", ".join(product_data_json.get("description", "").split(",")), # Example, adjust as needed
+                        "ingredients_list": product_data_json.get("description"),
                         "image_url": product_data_json.get("image"),
                         "product_url": url,
                     }
                 elif site_selectors:
                     print(f"Falling back to CSS selectors for {url}")
-                    # product = await self.extract_with_css(page, site_selectors)
-                    # For now, we'll just log that we need to implement it
-                    print("CSS selector logic not implemented yet.")
-                    return
-                else:
-                    print(f"No extraction method found for {url}")
+                    css_extracted_data = await self.extract_with_css(page, site_selectors)
+                    if css_extracted_data:
+                        product_to_upsert = {
+                            "sku": css_extracted_data.get("sku", f"SKU_MISSING_{hash(url)}_CSS"),
+                            "brand": css_extracted_data.get("brand", "Unknown"),
+                            "product_name": css_extracted_data.get("product_name", "Unknown Product (CSS)"),
+                            "price_amount": float(css_extracted_data.get("price_amount", "0.0").replace("$", "")), # Basic cleaning
+                            "currency": "USD", # Assuming USD for now
+                            "availability_status": css_extracted_data.get("availability_status", "Unknown"),
+                            "ingredients_list": css_extracted_data.get("ingredients_list"),
+                            "image_url": css_extracted_data.get("image_url"),
+                            "product_url": url,
+                        }
+
+                if not product_to_upsert:
+                    print(f"No data extracted for {url}. Skipping.")
                     return
 
                 # Clean and validate data before upserting
-                if not all([product["sku"], product["product_name"], product["price_amount"]]):
+                if not all([product_to_upsert.get("sku"), product_to_upsert.get("product_name"), product_to_upsert.get("price_amount") is not None]):
                     print(f"Incomplete data for {url}. Skipping.")
                     return
                 
                 with Session(engine) as session:
-                    upsert_product(session, product)
+                    upsert_product(session, product_to_upsert)
                 
-                print(f"Successfully scraped and saved {product['product_name']}")
+                print(f"Successfully scraped and saved {product_to_upsert.get('product_name')}")
                 return
             except (TimeoutError, Error) as e:
                 print(f"Network/Proxy error on attempt {attempt + 1} for {url}: {e}")

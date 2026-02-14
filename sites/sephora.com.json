@@ -1,0 +1,8 @@
+{
+  "selectors": {
+    "brand": "[data-at-id='brand_name_link']",
+    "product_name": "[data-at-id='product_name']",
+    "price_amount": "[data-at-id='price_standard']",
+    "ingredients_list": "[data-at-id='ingredients_value']"
+  }
+}
