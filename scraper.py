@@ -11,7 +11,7 @@ from asyncio import TimeoutError
 
 from models import upsert_product, engine, create_db_and_tables
 from sqlmodel.ext.asyncio.session import AsyncSession
-from tasks import pop_url_from_queue, push_to_dlq
+from tasks import get_url_for_processing, mark_url_as_done, push_to_dlq, r, QUEUE_NAME
 from browser_manager import BrowserManager
 import extraction
 from logger import get_logger
@@ -21,9 +21,10 @@ logger = get_logger(__name__)
 # --- Configuration ---
 PROXY_URL = os.environ.get("PROXY_URL")
 
-async def scrape_product(browser_manager: BrowserManager, url: str):
+async def scrape_product(browser_manager: BrowserManager, url: str) -> bool:
     """
     Orchestrates the scraping of a single product page.
+    Returns True on success, False on failure.
     """
     page = None
     site_config = get_site_config(url)
@@ -61,17 +62,17 @@ async def scrape_product(browser_manager: BrowserManager, url: str):
 
             if not product_to_upsert:
                 logger.warning(f"No data extracted for {url}. Skipping.")
-                return
+                return True # Consider it "done" as there's nothing more to do
 
             if not all([product_to_upsert.get("sku"), product_to_upsert.get("product_name"), product_to_upsert.get("price_amount") is not None]):
                 logger.warning(f"Incomplete data for {url}. Skipping.")
-                return
-            
+                return True # Also "done"
+
             async with AsyncSession(engine) as session:
                 await upsert_product(session, product_to_upsert)
             
             logger.info(f"Successfully scraped and saved {product_to_upsert.get('product_name')}")
-            return
+            return True # Success
         except (TimeoutError, Error) as e:
             logger.warning(f"Network/Proxy error on attempt {attempt + 1} for {url}: {e}")
             logger.info("Forcing proxy rotation.")
@@ -84,8 +85,8 @@ async def scrape_product(browser_manager: BrowserManager, url: str):
             if page:
                 await page.close()
     
-    logger.error(f"Failed to scrape {url} after multiple retries. Sending to Dead Letter Queue.")
-    push_to_dlq(url)
+    logger.error(f"Failed to scrape {url} after all retries.")
+    return False # Failure
 
 # --- Helper Functions ---
 
@@ -180,17 +181,27 @@ async def main():
 
         logger.info("Worker started. Waiting for URLs from Redis queue...")
         while True:
-            url = pop_url_from_queue()
+            url = get_url_for_processing()
             if not url:
                 await asyncio.sleep(10)
                 continue
 
             logger.info(f"Processing URL: {url}")
-            await scrape_product(browser_manager, url)
+            success = await scrape_product(browser_manager, url)
+
+            if success:
+                mark_url_as_done(url)
+            else:
+                # Failed after all retries, move from processing to DLQ
+                mark_url_as_done(url) # Remove from processing
+                push_to_dlq(url)      # Add to DLQ
 
 if __name__ == "__main__":
     from tasks import push_url_to_queue
-    if pop_url_from_queue() is None: # Add a test URL if the queue is empty
-        push_url_to_queue("https://www.sephora.com/product/the-ordinary-deciem-niacinamide-10-zinc-1-P427417")
+    # This check is now less useful as items are in processing.
+    # We will assume for testing that if the main queue is empty, we add one.
+    # A better approach would be a separate script to populate the queue.
+    if r.llen(QUEUE_NAME) == 0:
+         push_url_to_queue("https://www.sephora.com/product/the-ordinary-deciem-niacinamide-10-zinc-1-P427417")
     
     asyncio.run(main())
