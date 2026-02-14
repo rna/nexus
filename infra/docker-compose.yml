@@ -24,13 +24,15 @@ services:
       - nexus-network
 
   scraper-worker:
-    build: .
+    build:
+      context: .. # The project root, one level up from this file's directory
+      dockerfile: Dockerfile
     container_name: scraper-worker
-    command: python scraper.py
+    command: python workers/worker.py
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-nexus}
       - REDIS_URL=redis://redis:6379
-      - PROXY_URL=${PROXY_URL}
+      - PROXY_URLS=${PROXY_URLS} # Note the change to plural
     depends_on:
       - postgres
       - redis

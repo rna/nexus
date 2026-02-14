@@ -1,25 +1,34 @@
-from typing import Optional
-from datetime import datetime
-
-from sqlmodel import Field, SQLModel
-from sqlmodel.ext.asyncio.session import AsyncSession, AsyncEngine, create_async_engine
-from sqlalchemy.dialects.postgresql import insert
 import os
+from datetime import datetime, timezone
+import hashlib
+import json
+from typing import Optional
+
+from sqlalchemy.dialects.postgresql import insert
+from sqlmodel import Field, SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession, create_async_engine
 
 class Product(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    sku: str = Field(index=True, unique=True)
-    brand: str
-    product_name: str
-    price_amount: float
-    currency: str
-    availability_status: str
+    # Core product identifiers
+    sku: str = Field(primary_key=True)
+    product_url: str = Field(index=True, unique=True)
+    
+    # Scraped data
+    brand: Optional[str] = Field(index=True)
+    product_name: Optional[str] = Field(index=True)
+    price_amount: Optional[float] = None
+    currency: Optional[str] = None
+    availability_status: Optional[str] = None
     ingredients_list: Optional[str] = None
     image_url: Optional[str] = None
-    product_url: str = Field(unique=True)
-    scraped_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    
+    # Metadata for tracking and idempotency
+    first_scraped_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_scraped_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    version_hash: str # SHA-256 hash of the product data dictionary
 
-# The database URL must be updated to use the asyncpg driver
+# --- Database Engine ---
+
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/nexus")
 ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
@@ -27,32 +36,59 @@ engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
 
 async def create_db_and_tables():
     async with engine.begin() as conn:
-        # await conn.run_sync(SQLModel.metadata.drop_all) # Use for testing if you need to drop tables
         await conn.run_sync(SQLModel.metadata.create_all)
 
-async def upsert_product(session: AsyncSession, product_data: dict):
+# --- Idempotent Upsert Logic ---
+
+def generate_version_hash(data: dict) -> str:
+    """Creates a SHA-256 hash of a dictionary to track data versions."""
+    # Sort the dictionary to ensure consistent hash generation
+    dhash = hashlib.sha256()
+    encoded = json.dumps(data, sort_keys=True).encode()
+    dhash.update(encoded)
+    return dhash.hexdigest()
+
+async def upsert_products(session: AsyncSession, products_data: list[dict]):
     """
-    Asynchronously inserts or updates a product in the database based on the SKU.
+    Asynchronously and idempotently inserts or updates a batch of products.
+    - Only updates if the `version_hash` has changed.
+    - Sets `first_scraped_at` on creation.
+    - Updates `last_scraped_at` on every upsert.
     """
-    # The dialect-specific insert statement needs to be handled carefully in an async context
-    # A simple merge is often easier and more database-agnostic with async sessions
+    if not products_data:
+        return
+
+    # Prepare values for insertion
+    values_to_insert = []
+    for p_data in products_data:
+        values_to_insert.append({
+            **p_data,
+            "version_hash": generate_version_hash(p_data),
+            "last_scraped_at": datetime.now(timezone.utc),
+        })
+
+    # Create the UPSERT statement
+    stmt = insert(Product).values(values_to_insert)
+
+    # Define what to do on conflict (when SKU already exists)
+    # These columns will be updated ONLY if the new `version_hash` is different
+    # from the existing one.
+    update_stmt = stmt.on_conflict_do_update(
+        index_elements=['sku'],
+        set_={
+            "brand": stmt.excluded.brand,
+            "product_name": stmt.excluded.product_name,
+            "price_amount": stmt.excluded.price_amount,
+            "currency": stmt.excluded.currency,
+            "availability_status": stmt.excluded.availability_status,
+            "ingredients_list": stmt.excluded.ingredients_list,
+            "image_url": stmt.excluded.image_url,
+            "product_url": stmt.excluded.product_url,
+            "last_scraped_at": stmt.excluded.last_scraped_at,
+            "version_hash": stmt.excluded.version_hash,
+        },
+        where=(Product.version_hash != stmt.excluded.version_hash)
+    )
     
-    # Check if product exists
-    result = await session.get(Product, product_data.get("sku"))
-    if result:
-        # It's not straightforward to get the existing product with a unique constraint other than PK
-        # For this implementation, we will assume SKU is the primary key for simplicity in async
-        # A more robust solution might involve a select and then an update.
-        # However, for the UPSERT pattern, `on_conflict_do_update` is ideal but requires raw execute.
-        
-        stmt = insert(Product).values(**product_data)
-        update_dict = {c.name: c for c in stmt.excluded if c.name not in ["sku"]}
-        final_stmt = stmt.on_conflict_do_update(index_elements=['sku'], set_=update_dict)
-        
-        await session.execute(final_stmt)
-    else:
-        # Insert new product
-        new_product = Product(**product_data)
-        session.add(new_product)
-        
+    await session.execute(update_stmt)
     await session.commit()

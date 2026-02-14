@@ -4,3 +4,4 @@ sqlalchemy
 sqlmodel
 asyncpg
 redis
+httpx
