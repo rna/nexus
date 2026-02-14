@@ -101,9 +101,25 @@ class Scraper:
             except (TimeoutError, Error):
                 pass # Button not found or not clickable, try next selector
 
+    async def human_like_scroll(self, page: Page):
+        """Scrolls down the page in a human-like manner."""
+        print("Scrolling page...")
+        total_height = await page.evaluate("document.body.scrollHeight")
+        viewport_height = page.viewport_size['height']
+        current_scroll = 0
+        
+        while current_scroll < total_height:
+            scroll_increment = random.randint(int(viewport_height * 0.4), int(viewport_height * 0.8))
+            await page.mouse.wheel(0, scroll_increment)
+            await asyncio.sleep(random.uniform(0.3, 1.0))
+            current_scroll += scroll_increment
+            # It's good practice to re-check total height in case of lazy loading
+            total_height = await page.evaluate("document.body.scrollHeight")
+
+
     async def extract_from_json_ld(self, page: Page) -> Optional[Dict[str, Any]]:
         """Extracts product data from JSON-LD scripts."""
-        try:
+        try::
             json_ld_element = await page.query_selector('script[type="application/ld+json"]')
             if not json_ld_element:
                 return None
@@ -158,6 +174,9 @@ class Scraper:
 
                 # Handle cookie banners
                 await self.handle_cookie_banner(page)
+
+                # Scroll the page to load all content
+                await self.human_like_scroll(page)
 
                 if response.status in [403, 429, 503]:
                     raise Exception(f"Received status {response.status}")
