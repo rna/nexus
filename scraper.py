@@ -14,6 +14,7 @@ from models import upsert_product, engine, create_db_and_tables
 from sqlmodel import Session
 from user_agents import get_random_user_agent
 from fingerprints import get_fingerprint, get_override_script
+from tasks import push_to_dlq
 
 # --- Configuration ---
 PROXY_URL = os.environ.get("PROXY_URL")
@@ -262,7 +263,8 @@ class Scraper:
                 if page:
                     await page.close()
         
-        print(f"Failed to scrape {url} after multiple retries.")
+        print(f"Failed to scrape {url} after multiple retries. Sending to Dead Letter Queue.")
+        push_to_dlq(url)
 
 
 def init_db():
