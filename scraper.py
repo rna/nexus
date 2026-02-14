@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright, Error, Page
 from asyncio import TimeoutError
 
 from models import upsert_product, engine, create_db_and_tables
-from sqlmodel import Session
+from sqlmodel.ext.asyncio.session import AsyncSession
 from tasks import pop_url_from_queue, push_to_dlq
 from browser_manager import BrowserManager
 import extraction
@@ -64,8 +64,8 @@ async def scrape_product(browser_manager: BrowserManager, url: str):
                 print(f"Incomplete data for {url}. Skipping.")
                 return
             
-            with Session(engine) as session:
-                upsert_product(session, product_to_upsert)
+            async with AsyncSession(engine) as session:
+                await upsert_product(session, product_to_upsert)
             
             print(f"Successfully scraped and saved {product_to_upsert.get('product_name')}")
             return
@@ -153,23 +153,23 @@ def normalize_css_data(data: dict, url: str) -> dict:
 
 # --- Main Application Logic ---
 
-def init_db():
+async def init_db():
     """Initializes the database and tables with retry logic."""
     print("Initializing database...")
     for i in range(5):
         try:
-            create_db_and_tables()
+            await create_db_and_tables()
             print("Database initialized successfully.")
             return
         except Exception as e:
             print(f"Database connection failed (attempt {i+1}/5): {e}")
-            time.sleep(5)
+            await asyncio.sleep(5)
     print("Could not connect to the database. Exiting.")
     exit(1)
 
 async def main():
     """Main function to set up and run the scraper worker."""
-    init_db()
+    await init_db()
     async with async_playwright() as p:
         browser_manager = BrowserManager(p, PROXY_URL)
         await browser_manager.launch_browser()
