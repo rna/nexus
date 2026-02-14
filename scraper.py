@@ -2,12 +2,13 @@ import asyncio
 import json
 import random
 import os
+import time
 from typing import Optional, Dict, Any
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 from playwright_stealth import stealth_async
 
-from models import upsert_product, engine
+from models import upsert_product, engine, create_db_and_tables
 from sqlmodel import Session
 
 # --- Configuration ---
@@ -171,8 +172,25 @@ class Scraper:
         print(f"Failed to scrape {url} after multiple retries.")
 
 
+def init_db():
+    """Initializes the database and tables with retry logic."""
+    print("Initializing database...")
+    for i in range(5):
+        try:
+            create_db_and_tables()
+            print("Database initialized successfully.")
+            return
+        except Exception as e:
+            print(f"Database connection failed (attempt {i+1}/5): {e}")
+            time.sleep(5)
+    print("Could not connect to the database. Exiting.")
+    exit(1)
+
+
 async def main():
     """Main function to run the scraper."""
+    init_db()
+
     async with async_playwright() as p:
         scraper = Scraper(p)
         await scraper.setup_browser()
