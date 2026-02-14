@@ -12,6 +12,7 @@ from asyncio import TimeoutError
 from models import upsert_product, engine, create_db_and_tables
 from sqlmodel import Session
 from user_agents import get_random_user_agent
+from fingerprints import get_fingerprint, get_override_script
 
 # --- Configuration ---
 PROXY_URL = os.environ.get("PROXY_URL")
@@ -24,6 +25,7 @@ class Scraper:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.request_count = 0
+        self.fingerprint: Optional[dict] = None
 
     async def setup_browser(self):
         """Initializes the browser and a new browser context with stealth settings."""
@@ -35,6 +37,9 @@ class Scraper:
         if self.context:
             await self.context.close()
 
+        self.fingerprint = get_fingerprint()
+        override_script = get_override_script(self.fingerprint)
+
         user_agent = get_random_user_agent()
         viewport = {
             "width": random.randint(1280, 1920),
@@ -44,12 +49,14 @@ class Scraper:
         context_options = {
             "user_agent": user_agent,
             "viewport": viewport,
+            "java_script_enabled": True,
         }
 
         if PROXY_URL:
             context_options["proxy"] = {"server": PROXY_URL}
 
         self.context = await self.browser.new_context(**context_options)
+        await self.context.add_init_script(override_script)
         self.context.set_default_navigation_timeout(60 * 1000) # 60 seconds
 
         # Disable loading of images, css, and fonts
