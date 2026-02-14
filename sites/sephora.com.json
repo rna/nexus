@@ -3,6 +3,15 @@
     "brand": "[data-at-id='brand_name_link']",
     "product_name": "[data-at-id='product_name']",
     "price_amount": "[data-at-id='price_standard']",
-    "ingredients_list": "[data-at-id='ingredients_value']"
+    "ingredients_list": "[data-at-id='ingredients_value']",
+    "image": "[data-at-id='product_image']",
+    "description": "[data-at-id='product_description']",
+    "availability": "[data-at-id='availability_status']",
+    "url": "window.location.href",
+    "site": "sephora.com",
+    "canonical": "link[rel='canonical']",
+    "category": "",
+    "brand_slug": "",
+    "product_slug": ""
   }
 }
