@@ -120,10 +120,21 @@ class Scraper:
         for attempt in range(5): # 5 retries
             try:
                 page = await self.get_page()
+
+                # Human-like delay before navigating
+                await asyncio.sleep(random.uniform(1, 3))
+
                 response = await page.goto(url, wait_until="domcontentloaded")
+
+                # Human-like mouse movement and delay after loading
+                await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+                await asyncio.sleep(random.uniform(0.5, 1.5))
 
                 if response.status in [403, 429, 503]:
                     raise Exception(f"Received status {response.status}")
+
+                # Human-like delay before extraction
+                await asyncio.sleep(random.uniform(1, 2))
 
                 product_data_json = await self.extract_from_json_ld(page)
 
