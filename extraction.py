@@ -3,6 +3,9 @@ from typing import Optional, Dict, Any
 
 from playwright.async_api import Page, Error
 from asyncio import TimeoutError
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 async def extract_from_json_ld(page: Page) -> Optional[Dict[str, Any]]:
     """Extracts product data from JSON-LD scripts."""
@@ -23,7 +26,7 @@ async def extract_from_json_ld(page: Page) -> Optional[Dict[str, Any]]:
                     return item
 
     except (json.JSONDecodeError, AttributeError, Error) as e:
-        print(f"Could not parse JSON-LD: {e}")
+        logger.warning(f"Could not parse JSON-LD: {e}")
     return None
 
 async def extract_with_css(page: Page, selectors: Dict[str, str]) -> Dict[str, Any]:
@@ -35,5 +38,5 @@ async def extract_with_css(page: Page, selectors: Dict[str, str]) -> Dict[str, A
             if element:
                 product_data[key] = await element.inner_text()
         except (TimeoutError, Error) as e:
-            print(f"Could not extract {key} using selector '{selector}': {e}")
+            logger.warning(f"Could not extract {key} using selector '{selector}': {e}")
     return product_data

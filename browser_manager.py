@@ -7,6 +7,9 @@ from playwright_stealth import stealth_async
 
 from user_agents import get_random_user_agent
 from fingerprints import get_fingerprint, get_override_script
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 class BrowserManager:
     def __init__(self, playwright: Playwright, proxy_url: Optional[str] = None):
@@ -55,7 +58,7 @@ class BrowserManager:
     async def get_page(self) -> Page:
         """Gets a page, handling context rotation."""
         if self.request_count >= self.request_count_per_proxy_session:
-            print("Rotating browser context and proxy session...")
+            logger.info("Rotating browser context and proxy session...")
             await self.new_context()
             self.request_count = 0
 
