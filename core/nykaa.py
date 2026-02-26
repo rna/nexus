@@ -21,7 +21,7 @@ def is_nykaa_product_page_url(url: str) -> bool:
 
 
 def build_product_details_api_url(product_id: str | int, app_version: str = "8.6.6") -> str:
-    params = {"app_version": str(app_version), "productId": str(product_id)}
+    params = {"app_version": str(app_version), "product_id": str(product_id)}
     return f"{NYKAA_PRODUCT_DETAILS_ENDPOINT}?{urlencode(params)}"
 
 
@@ -41,4 +41,3 @@ def iter_product_api_urls_from_sitemap_locs(locs: Iterable[str], app_version: st
         product_id = extract_product_id_from_url(loc)
         if product_id:
             yield build_product_details_api_url(product_id, app_version=app_version)
-

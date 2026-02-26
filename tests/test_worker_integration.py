@@ -57,7 +57,7 @@ class WorkerPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         from sqlalchemy import delete, select
         from sqlmodel.ext.asyncio.session import AsyncSession
 
-        api_url = "https://www.nykaa.com/app-api/index.php/products/details?app_version=8.6.6&productId=688908"
+        api_url = "https://www.nykaa.com/app-api/index.php/products/details?app_version=8.6.6&product_id=688908"
         raw_payload = {
             "status": "success",
             "response": {

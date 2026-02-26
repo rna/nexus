@@ -66,7 +66,7 @@ def _normalize_nykaa(data: Dict[str, Any], url: str) -> Dict[str, Any]:
 
     parsed = urlparse(url)
     query_params = parse_qs(parsed.query)
-    query_product_id = query_params.get("productId", [None])[0]
+    query_product_id = query_params.get("product_id", [None])[0] or query_params.get("productId", [None])[0]
 
     product_id = (
         payload.get("id")
@@ -76,7 +76,7 @@ def _normalize_nykaa(data: Dict[str, Any], url: str) -> Dict[str, Any]:
     )
     product_id_str = str(product_id) if product_id is not None else None
 
-    page_url = payload.get("url") or payload.get("product_url")
+    page_url = payload.get("url") or payload.get("product_url") or payload.get("share_url")
     if isinstance(page_url, str) and page_url:
         if page_url.startswith("/"):
             page_url = f"https://www.nykaa.com{page_url}"
@@ -106,10 +106,13 @@ def _normalize_nykaa(data: Dict[str, Any], url: str) -> Dict[str, Any]:
 
     image_url = payload.get("image_url") or payload.get("img_url")
     if not image_url:
-        image_urls = payload.get("image_urls") or payload.get("images")
+        image_urls = payload.get("image_urls") or payload.get("images") or payload.get("carousel")
         if isinstance(image_urls, list) and image_urls:
             first_image = image_urls[0]
-            image_url = first_image.get("url") if isinstance(first_image, dict) else first_image
+            if isinstance(first_image, dict):
+                image_url = first_image.get("url") or first_image.get("image")
+            else:
+                image_url = first_image
 
     saleable = payload.get("is_saleable")
     in_stock = payload.get("in_stock", payload.get("is_in_stock"))
@@ -125,6 +128,7 @@ def _normalize_nykaa(data: Dict[str, Any], url: str) -> Dict[str, Any]:
         or payload.get("ingredient_info")
         or payload.get("ingredientDesc")
         or payload.get("key_ingredients")
+        or payload.get("description")
     )
 
     sku = payload.get("sku") or payload.get("sku_code")
@@ -134,8 +138,8 @@ def _normalize_nykaa(data: Dict[str, Any], url: str) -> Dict[str, Any]:
     return {
         "sku": sku,
         "product_url": page_url,
-        "brand": brand,
-        "product_name": payload.get("name") or payload.get("title"),
+        "brand": brand or payload.get("manufacturer"),
+        "product_name": payload.get("name") or payload.get("title") or payload.get("product_name"),
         "price_amount": price_amount,
         "currency": payload.get("currency") or "INR",
         "availability_status": availability_status,

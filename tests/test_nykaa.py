@@ -25,7 +25,7 @@ class NykaaHelpersTests(unittest.TestCase):
     def test_build_product_details_api_url(self):
         url = build_product_details_api_url(688908, app_version="9.0.0")
         self.assertIn("/products/details", url)
-        self.assertIn("productId=688908", url)
+        self.assertIn("product_id=688908", url)
         self.assertIn("app_version=9.0.0", url)
 
     def test_iter_sitemap_locs_and_product_api_urls(self):
@@ -62,7 +62,7 @@ class NykaaNormalizerTests(unittest.TestCase):
                 "ingredients": "Aloe, Watermelon",
             },
         }
-        api_url = "https://www.nykaa.com/app-api/index.php/products/details?app_version=8.6.6&productId=688908"
+        api_url = "https://www.nykaa.com/app-api/index.php/products/details?app_version=8.6.6&product_id=688908"
         normalized = normalize_product_data(raw, api_url)
         assert normalized is not None
         self.assertEqual(normalized["sku"], "nykaa-688908")
@@ -77,7 +77,7 @@ class NykaaNormalizerTests(unittest.TestCase):
 
     def test_falls_back_to_query_product_id_if_payload_missing_id(self):
         raw = {"status": "success", "response": {"name": "Product"}}
-        api_url = "https://www.nykaa.com/app-api/index.php/products/details?app_version=8.6.6&productId=12345"
+        api_url = "https://www.nykaa.com/app-api/index.php/products/details?app_version=8.6.6&product_id=12345"
         normalized = normalize_product_data(raw, api_url)
         assert normalized is not None
         self.assertEqual(normalized["sku"], "nykaa-12345")
@@ -86,4 +86,3 @@ class NykaaNormalizerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
