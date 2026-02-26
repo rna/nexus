@@ -14,6 +14,7 @@ def detect_block(response_text: str, status_code: int) -> BlockType:
     Analyzes an HTTP response to detect if and how we are being blocked.
     """
     lower_text = response_text.lower()
+    stripped = lower_text.lstrip()
 
     if status_code == 429:
         return BlockType.RATE_LIMIT
@@ -29,7 +30,7 @@ def detect_block(response_text: str, status_code: int) -> BlockType:
         return BlockType.CAPTCHA
 
     # If we expect JSON but get HTML, it's a form of block (often a login/challenge page)
-    if "<!doctype html>" in lower_text or "<html" in lower_text:
+    if stripped.startswith("<!doctype html>") or stripped.startswith("<html"):
         # This check assumes we are expecting API responses, not HTML pages
         return BlockType.UNEXPECTED_FORMAT
         

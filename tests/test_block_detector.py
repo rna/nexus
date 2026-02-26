@@ -16,7 +16,10 @@ class BlockDetectorTests(unittest.TestCase):
     def test_not_blocked_for_normal_json(self):
         self.assertEqual(detect_block('{"ok": true}', 200), BlockType.NOT_BLOCKED)
 
+    def test_not_blocked_for_json_with_embedded_html_snippet(self):
+        body = '{"status":"success","response":{"description":"<html-safe>Rich text</html-safe>"}}'
+        self.assertEqual(detect_block(body, 200), BlockType.NOT_BLOCKED)
+
 
 if __name__ == "__main__":
     unittest.main()
-
