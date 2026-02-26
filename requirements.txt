@@ -1,6 +1,7 @@
 playwright
 playwright-stealth
 sqlalchemy
+alembic
 sqlmodel
 asyncpg
 redis
