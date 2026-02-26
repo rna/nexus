@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15
@@ -28,7 +26,7 @@ services:
       context: .. # The project root, one level up from this file's directory
       dockerfile: Dockerfile
     container_name: scraper-worker
-    command: python workers/worker.py
+    command: python -m workers.worker
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-nexus}
       - REDIS_URL=redis://redis:6379

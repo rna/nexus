@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Command to run the worker when the container launches
-CMD ["python", "workers/worker.py"]
+CMD ["python", "-m", "workers.worker"]
