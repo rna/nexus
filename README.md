@@ -66,8 +66,68 @@ This is the main, continuously running process that scrapes data at high volume.
     ```bash
     docker-compose -f infra/docker-compose.yml up --build
     ```
-*   The `scraper-worker` will start and wait for tasks. For initial testing, it will seed the queue with a hypothetical Sephora API endpoint if the queue is empty.
+*   The `scraper-worker` will start and wait for tasks from Redis (it does not auto-seed URLs).
 
 ### Step 3: Populate the Queue
 
 *   For real scraping, you need to populate the `scraping_queue` in Redis with the API URLs you found during the discovery phase. You would typically write a separate, simple "crawler" script for this that finds product IDs on category pages and formats them into API URLs.
+
+## Nykaa Extraction (Current Project Target)
+
+### Queue Seeding from Nykaa Sitemap
+
+Use the Nykaa sitemap seeder to discover product page URLs and convert them into Nykaa product-details API URLs:
+
+```bash
+python discovery/nykaa_sitemap_seed.py
+```
+
+Useful env vars:
+- `NYKAA_SITEMAP_URL` (default `https://www.nykaa.com/sitemap.xml`)
+- `NYKAA_APP_VERSION` (default `8.6.6`)
+- `NYKAA_SITEMAP_MAX_FILES` (limit sitemap traversal)
+- `NYKAA_SITEMAP_MAX_PRODUCTS` (limit queued products for test runs)
+
+### Keeping Your Home IP Hidden (No Residential Proxies)
+
+The framework is proxy-first and **fails closed** by default if `PROXY_URLS` is missing. For a personal project, safer alternatives are:
+
+1. Run the stack on a cheap cloud VM (the VM IP is exposed, not your home IP).
+2. Run the worker in a VPN-routed Docker namespace (see VPN profile below).
+
+`ALLOW_DIRECT_EGRESS=1` is an explicit opt-in mode for these scenarios. It should only be used:
+- on a cloud VM you control, or
+- inside a VPN-routed container namespace
+
+It should **not** be used on your local machine without a VPN route.
+
+### VPN-Routed Worker Profile (Linux/VPS-Oriented)
+
+An override compose file is included at `infra/docker-compose.vpn.yml` using a `gluetun` VPN sidecar and a VPN-routed worker service (`scraper-worker-vpn`).
+
+Start only the VPN-routed services (and avoid starting the default worker at the same time):
+
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.vpn.yml --profile vpn up -d postgres redis vpn scraper-worker-vpn
+```
+
+Notes:
+- Fill in VPN env vars (`VPN_SERVICE_PROVIDER`, `WIREGUARD_PRIVATE_KEY`, `WIREGUARD_ADDRESSES`, etc.).
+- This pattern works best on a Linux host / cloud VM with `/dev/net/tun` available.
+- On Docker Desktop (macOS/Windows), a host-level VPN or cloud VM is usually simpler.
+
+## Database Migrations (Alembic)
+
+Alembic is included so schema changes (new columns/indexes) can be applied safely without deleting your scraped data.
+
+Common commands:
+
+```bash
+alembic heads
+alembic upgrade head
+alembic revision -m "describe change"
+```
+
+Why this matters:
+- `SQLModel.metadata.create_all()` creates missing tables, but it does **not** update existing tables when your models change.
+- Once you start collecting data you care about, migrations prevent schema drift and avoid destructive resets.

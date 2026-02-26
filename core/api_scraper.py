@@ -2,7 +2,7 @@ import httpx
 from typing import Optional, Dict
 
 from logger import get_logger
-from .proxy_manager import ProxyManager
+from .proxy_manager import DIRECT_PROXY_SENTINEL, ProxyManager
 from .block_detector import detect_block, BlockType
 
 logger = get_logger(__name__)
@@ -29,6 +29,8 @@ class ApiScraper:
         Build kwargs compatible with modern httpx versions.
         `proxy` is supported in current releases; `proxies` support can be restored if needed.
         """
+        if proxy_url == DIRECT_PROXY_SENTINEL:
+            return {"timeout": 15}
         return {"proxy": proxy_url, "timeout": 15}
 
     async def get(self, url: str, headers: Optional[Dict] = None) -> Optional[Dict]:
@@ -61,7 +63,10 @@ class ApiScraper:
 
             # --- Success ---
             self.proxy_manager.record_success(proxy_url)
-            logger.info(f"Successful API request to {url} with proxy {proxy_url}")
+            if proxy_url == DIRECT_PROXY_SENTINEL:
+                logger.info(f"Successful API request to {url} with direct egress (no proxy)")
+            else:
+                logger.info(f"Successful API request to {url} with proxy {proxy_url}")
             return response.json()
 
         except httpx.HTTPStatusError as e:

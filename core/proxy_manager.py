@@ -7,6 +7,7 @@ from typing import Optional
 from logger import get_logger
 
 logger = get_logger(__name__)
+DIRECT_PROXY_SENTINEL = "direct://"
 
 @dataclass
 class Proxy:
@@ -37,6 +38,13 @@ class ProxyManager:
         """Loads proxies from the PROXY_URLS environment variable."""
         proxy_urls_str = os.getenv("PROXY_URLS")
         if not proxy_urls_str:
+            if os.getenv("ALLOW_DIRECT_EGRESS", "").lower() in {"1", "true", "yes"}:
+                logger.warning(
+                    "ALLOW_DIRECT_EGRESS is enabled. Requests will not use a proxy. "
+                    "Use this only on a cloud VM or in a VPN-routed container namespace."
+                )
+                return [Proxy(url=DIRECT_PROXY_SENTINEL)]
+
             logger.critical("No PROXY_URLS environment variable found. Proxy Manager cannot operate.")
             return []
         
@@ -73,6 +81,8 @@ class ProxyManager:
 
     def record_success(self, proxy_url: str):
         """Records a successful request for a proxy, improving its health."""
+        if proxy_url == DIRECT_PROXY_SENTINEL:
+            return
         proxy = self._find_proxy(proxy_url)
         if proxy:
             proxy.success_count += 1
@@ -82,6 +92,8 @@ class ProxyManager:
 
     def record_failure(self, proxy_url: str):
         """Records a failed request, reducing health and potentially starting a cooldown."""
+        if proxy_url == DIRECT_PROXY_SENTINEL:
+            return
         proxy = self._find_proxy(proxy_url)
         if proxy:
             proxy.failure_count += 1

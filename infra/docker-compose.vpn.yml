@@ -1,0 +1,37 @@
+services:
+  vpn:
+    image: qmcgaw/gluetun:latest
+    container_name: vpn
+    profiles: ["vpn"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TZ=${TZ:-UTC}
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER:-change-me}
+      - VPN_TYPE=${VPN_TYPE:-wireguard}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-change-me}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-10.0.0.2/32}
+    restart: unless-stopped
+    networks:
+      - nexus-network
+
+  scraper-worker-vpn:
+    profiles: ["vpn"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: scraper-worker-vpn
+    command: python -m workers.worker
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-nexus}
+      - REDIS_URL=redis://redis:6379
+      - ALLOW_DIRECT_EGRESS=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      - postgres
+      - redis
+      - vpn
+    network_mode: "service:vpn"
+

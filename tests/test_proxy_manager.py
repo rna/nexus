@@ -10,6 +10,11 @@ class ProxyManagerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ProxyManager()
 
+    def test_allows_explicit_direct_egress_mode(self):
+        with mock.patch.dict("os.environ", {"ALLOW_DIRECT_EGRESS": "1"}, clear=True):
+            pm = ProxyManager()
+            self.assertEqual(pm.get_proxy(), "direct://")
+
     def test_loads_and_rotates_proxies(self):
         env = {"PROXY_URLS": "http://user:pass@host1:1111,http://user:pass@host2:2222"}
         with mock.patch.dict("os.environ", env, clear=True):
@@ -26,7 +31,14 @@ class ProxyManagerTests(unittest.TestCase):
             self.assertTrue(pm.proxies[0].is_cooling_down)
             self.assertIsNone(pm.get_proxy())
 
+    def test_direct_egress_not_penalized(self):
+        with mock.patch.dict("os.environ", {"ALLOW_DIRECT_EGRESS": "1"}, clear=True):
+            pm = ProxyManager()
+            proxy_url = pm.get_proxy()
+            pm.record_failure(proxy_url)
+            self.assertEqual(pm.proxies[0].health_score, 100)
+            self.assertFalse(pm.proxies[0].is_cooling_down)
+
 
 if __name__ == "__main__":
     unittest.main()
-
