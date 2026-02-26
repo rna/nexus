@@ -4,7 +4,7 @@ Nexus is a production-grade, Dockerized, distributed web scraping framework. It 
 
 ## Core Principles
 
-*   **API-First Scraping:** We don't scrape websites; we scrape their private APIs. A browser is used as a one-time tool to discover these APIs, while 99.9% of requests are made via a lightweight `httpx` client.
+*   **API-First Scraping:** We don't scrape websites; we scrape their private APIs. A browser is used as a one-time tool to discover these APIs, while high-volume extraction runs through lightweight HTTP clients (`httpx` and browser-fingerprint `curl_cffi` when needed).
 *   **Intelligent Proxy Management:** Proxies are treated as a managed pool, not a simple URL. Their health is actively tracked, and underperforming proxies are automatically cooled down and rotated.
 *   **Adaptive Concurrency:** The framework monitors block rates and automatically throttles request concurrency up or down to maximize throughput without getting banned.
 *   **Resilience & Idempotency:** A reliable queueing system ensures no task is lost on a crash. Idempotent database writes with version hashing prevent data duplication and corruption on re-runs.
@@ -31,7 +31,7 @@ This is the main, continuously running process that scrapes data at high volume.
 *   **Process:**
     1.  A list of product API URLs is pushed to a Redis queue.
     2.  The worker pulls a URL, asks the `ProxyManager` for a healthy proxy, and acquires a concurrency slot from the `RateController`.
-    3.  A direct request is made to the API using `httpx`.
+    3.  A direct request is made to the API using `httpx` or a browser-fingerprint client (`curl_cffi`) when anti-bot rules require browser-like TLS/client fingerprints.
     4.  The `BlockDetector` checks the response. Failures are reported, penalizing the proxy's health score.
     5.  On success, the raw JSON is sent to the `Normalizer`, which transforms it into a clean, standard schema.
     6.  The data is saved to PostgreSQL idempotently.
@@ -64,7 +64,7 @@ This is the main, continuously running process that scrapes data at high volume.
 
 *   From the project root, start the main application stack:
     ```bash
-    docker-compose -f infra/docker-compose.yml up --build
+    docker compose -f infra/docker-compose.yml up --build
     ```
 *   The `scraper-worker` will start and wait for tasks from Redis (it does not auto-seed URLs).
 
@@ -83,10 +83,51 @@ python discovery/nykaa_sitemap_seed.py
 ```
 
 Useful env vars:
-- `NYKAA_SITEMAP_URL` (default `https://www.nykaa.com/sitemap.xml`)
+- `NYKAA_SITEMAP_URL` (default `https://www.nykaa.com/sitemap-v2/sitemap-products-index.xml`)
 - `NYKAA_APP_VERSION` (default `8.6.6`)
 - `NYKAA_SITEMAP_MAX_FILES` (limit sitemap traversal)
 - `NYKAA_SITEMAP_MAX_PRODUCTS` (limit queued products for test runs)
+- `NYKAA_SITEMAP_HTTP_BACKEND` (`auto`/`httpx`/`curl_cffi`; `auto` uses browser fingerprint for Nykaa)
+
+### Resumable Nykaa Batch Runner (Seed + Process + Progress Logs)
+
+Use `discovery/nykaa_batch_runner.py` for long runs. It:
+- optionally seeds from the Nykaa product sitemap
+- requeues in-flight items on restart
+- processes a capped number of products
+- logs queue stats and DB row counts at checkpoints
+
+Example: run a `1k` crawl in Docker (resumable by re-running with the same queue namespace):
+
+```bash
+docker compose -f infra/docker-compose.yml run --rm --no-deps \
+  -e ALLOW_DIRECT_EGRESS=1 \
+  -e HTTP_CLIENT_BACKEND=auto \
+  -e NYKAA_SITEMAP_HTTP_BACKEND=auto \
+  -e NYKAA_RUN_QUEUE_NAMESPACE=nykaa_1k \
+  -e NYKAA_RUN_TARGET_SUCCESS=1000 \
+  -e NYKAA_RUN_PROGRESS_EVERY=100 \
+  -e NYKAA_RUN_SEED=1 \
+  -e NYKAA_RUN_SEED_MAX_PRODUCTS=1000 \
+  -e NYKAA_RUN_SEED_MAX_FILES=20 \
+  scraper-worker python -m discovery.nykaa_batch_runner
+```
+
+Example: continue to `10k` using the same queue namespace (reseed safely via Redis dedupe + DB upsert):
+
+```bash
+docker compose -f infra/docker-compose.yml run --rm --no-deps \
+  -e ALLOW_DIRECT_EGRESS=1 \
+  -e HTTP_CLIENT_BACKEND=auto \
+  -e NYKAA_SITEMAP_HTTP_BACKEND=auto \
+  -e NYKAA_RUN_QUEUE_NAMESPACE=nykaa_10k \
+  -e NYKAA_RUN_TARGET_SUCCESS=10000 \
+  -e NYKAA_RUN_PROGRESS_EVERY=500 \
+  -e NYKAA_RUN_SEED=1 \
+  -e NYKAA_RUN_SEED_MAX_PRODUCTS=10000 \
+  -e NYKAA_RUN_SEED_MAX_FILES=120 \
+  scraper-worker python -m discovery.nykaa_batch_runner
+```
 
 ### Keeping Your Home IP Hidden (No Residential Proxies)
 
