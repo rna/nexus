@@ -5,7 +5,7 @@ from collections import deque
 import httpx
 
 from core.nykaa import iter_sitemap_locs, build_product_details_api_url, extract_product_id_from_url
-from core.proxy_manager import ProxyManager
+from core.proxy_manager import DIRECT_PROXY_SENTINEL, ProxyManager
 from logger import get_logger
 from tasks import push_urls_to_queue
 
@@ -26,7 +26,11 @@ async def fetch_text(url: str, proxy_manager: ProxyManager) -> str | None:
         return None
 
     try:
-        async with httpx.AsyncClient(proxy=proxy_url, timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
+        client_kwargs = {"timeout": REQUEST_TIMEOUT_SECONDS, "follow_redirects": True}
+        if proxy_url != DIRECT_PROXY_SENTINEL:
+            client_kwargs["proxy"] = proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
             response = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         proxy_manager.record_success(proxy_url)
