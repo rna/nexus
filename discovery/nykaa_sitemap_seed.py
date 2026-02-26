@@ -3,6 +3,10 @@ import os
 from collections import deque
 
 import httpx
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:  # pragma: no cover
+    curl_requests = None
 
 from core.nykaa import iter_sitemap_locs, build_product_details_api_url, extract_product_id_from_url
 from core.proxy_manager import DIRECT_PROXY_SENTINEL, ProxyManager
@@ -12,11 +16,31 @@ from tasks import push_urls_to_queue
 
 logger = get_logger(__name__)
 
-ROOT_SITEMAP_URL = os.getenv("NYKAA_SITEMAP_URL", "https://www.nykaa.com/sitemap.xml")
+ROOT_SITEMAP_URL = os.getenv("NYKAA_SITEMAP_URL", "https://www.nykaa.com/sitemap-v2/sitemap-products-index.xml")
 NYKAA_APP_VERSION = os.getenv("NYKAA_APP_VERSION", "8.6.6")
 MAX_SITEMAP_FILES = int(os.getenv("NYKAA_SITEMAP_MAX_FILES", "500"))
 MAX_PRODUCTS = int(os.getenv("NYKAA_SITEMAP_MAX_PRODUCTS", "0"))  # 0 = no cap
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("NYKAA_SITEMAP_TIMEOUT_SECONDS", "30"))
+NYKAA_SITEMAP_HTTP_BACKEND = os.getenv("NYKAA_SITEMAP_HTTP_BACKEND", "auto").lower()
+NYKAA_SITEMAP_IMPERSONATE = os.getenv("NYKAA_SITEMAP_IMPERSONATE", os.getenv("CURL_CFFI_IMPERSONATE", "chrome124"))
+_curl_session = None
+
+
+def _use_curl_backend(url: str) -> bool:
+    if NYKAA_SITEMAP_HTTP_BACKEND == "curl_cffi":
+        return True
+    if NYKAA_SITEMAP_HTTP_BACKEND == "httpx":
+        return False
+    return "nykaa.com" in url and curl_requests is not None
+
+
+def _get_curl_session():
+    global _curl_session
+    if curl_requests is None:
+        raise RuntimeError("curl_cffi not installed")
+    if _curl_session is None:
+        _curl_session = curl_requests.Session(impersonate=NYKAA_SITEMAP_IMPERSONATE)
+    return _curl_session
 
 
 async def fetch_text(url: str, proxy_manager: ProxyManager) -> str | None:
@@ -26,6 +50,21 @@ async def fetch_text(url: str, proxy_manager: ProxyManager) -> str | None:
         return None
 
     try:
+        if _use_curl_backend(url):
+            session = _get_curl_session()
+            request_kwargs = {
+                "timeout": REQUEST_TIMEOUT_SECONDS,
+                "headers": {"User-Agent": "Mozilla/5.0", "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"},
+            }
+            if proxy_url != DIRECT_PROXY_SENTINEL:
+                request_kwargs["proxy"] = proxy_url
+            response = await asyncio.to_thread(session.get, url, **request_kwargs)
+            if getattr(response, "status_code", 0) >= 400:
+                if hasattr(response, "raise_for_status"):
+                    response.raise_for_status()
+            proxy_manager.record_success(proxy_url)
+            return response.text
+
         client_kwargs = {"timeout": REQUEST_TIMEOUT_SECONDS, "follow_redirects": True}
         if proxy_url != DIRECT_PROXY_SENTINEL:
             client_kwargs["proxy"] = proxy_url

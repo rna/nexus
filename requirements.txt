@@ -6,3 +6,4 @@ sqlmodel
 asyncpg
 redis
 httpx
+curl_cffi
