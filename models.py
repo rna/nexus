@@ -10,6 +10,12 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import Field, SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+def utc_now_naive() -> datetime:
+    """
+    Match the current schema (`timestamp without time zone`) while still using UTC.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 class Product(SQLModel, table=True):
     # Core product identifiers
     sku: str = Field(primary_key=True)
@@ -28,8 +34,8 @@ class Product(SQLModel, table=True):
     raw_payload: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))
     
     # Metadata for tracking and idempotency
-    first_scraped_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    last_scraped_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    first_scraped_at: datetime = Field(default_factory=utc_now_naive)
+    last_scraped_at: datetime = Field(default_factory=utc_now_naive)
     version_hash: str # SHA-256 hash of the product data dictionary
 
 # --- Database Engine ---
@@ -77,7 +83,7 @@ async def upsert_products(session: AsyncSession, products_data: list[dict]):
     # Prepare values for insertion
     values_to_insert = []
     for p_data in products_data:
-        now = datetime.now(timezone.utc)
+        now = utc_now_naive()
         values_to_insert.append({
             **p_data,
             "first_scraped_at": now,

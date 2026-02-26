@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from core.api_scraper import ApiScraper
 from core.proxy_manager import ProxyManager
@@ -13,6 +13,9 @@ from logger import get_logger
 
 logger = get_logger(__name__)
 POLL_INTERVAL_SECONDS = int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5"))
+
+QueueGetFn = Callable[[], Optional[str]]
+QueueMarkFn = Callable[[str], None]
 
 async def process_batch(api_scraper: ApiScraper, urls: list[str]):
     """
@@ -44,6 +47,56 @@ async def process_single_url(api_scraper: ApiScraper, url: str) -> Optional[dict
     return normalized_data
 
 
+async def process_next_queue_item(
+    api_scraper: Any,
+    rate_controller: AdaptiveRateController,
+    *,
+    get_next_url: QueueGetFn = get_url_for_processing,
+    mark_done_fn: QueueMarkFn = mark_url_as_done,
+    push_dlq_fn: QueueMarkFn = push_to_dlq,
+    db_engine=engine,
+    poll_when_empty: bool = True,
+) -> dict[str, Any]:
+    """
+    Process at most one queued URL and persist it.
+
+    Returns a small status payload for observability/testing:
+    - {"status": "empty"}
+    - {"status": "success", "url": "...", "product_name": "..."}
+    - {"status": "failed", "url": "..."}
+    """
+    await rate_controller.acquire()
+    try:
+        url = get_next_url()
+        if not url:
+            if poll_when_empty:
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            return {"status": "empty"}
+
+        logger.info("Processing URL: %s", url)
+        normalized_data = await process_single_url(api_scraper, url)
+
+        if normalized_data:
+            async with AsyncSession(db_engine) as session:
+                await upsert_products(session, [normalized_data])
+            rate_controller.record_success()
+            mark_done_fn(url)
+            logger.info("Successfully processed and saved %s", normalized_data.get("product_name"))
+            return {
+                "status": "success",
+                "url": url,
+                "product_name": normalized_data.get("product_name"),
+                "sku": normalized_data.get("sku"),
+            }
+
+        rate_controller.record_failure()
+        logger.error("Failed to process %s. Moving to DLQ.", url)
+        push_dlq_fn(url)
+        return {"status": "failed", "url": url}
+    finally:
+        await rate_controller.release()
+
+
 async def main():
     """Main function to set up and run the scraper worker."""
     logger.info("Starting worker process...")
@@ -65,32 +118,7 @@ async def main():
     
     # This is a simplified worker. A production one might use a batching strategy.
     while True:
-        await rate_controller.acquire()
-        try:
-            url = get_url_for_processing()
-            if not url:
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                continue
-
-            logger.info(f"Processing URL: {url}")
-            
-            # For simplicity, we process one-by-one with concurrency control.
-            # A batching approach would be more efficient.
-            normalized_data = await process_single_url(api_scraper, url)
-            
-            if normalized_data:
-                async with AsyncSession(engine) as session:
-                    await upsert_products(session, [normalized_data])
-                rate_controller.record_success()
-                mark_url_as_done(url)
-                logger.info(f"Successfully processed and saved {normalized_data.get('product_name')}")
-            else:
-                rate_controller.record_failure()
-                logger.error(f"Failed to process {url}. Moving to DLQ.")
-                push_to_dlq(url)
-
-        finally:
-            await rate_controller.release()
+        await process_next_queue_item(api_scraper, rate_controller)
 
 
 if __name__ == "__main__":
