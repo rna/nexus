@@ -6,8 +6,9 @@ from typing import Any, Optional
 
 from sqlalchemy import Column, JSON
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import Field, SQLModel
-from sqlmodel.ext.asyncio.session import AsyncSession, create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 class Product(SQLModel, table=True):
     # Core product identifiers
