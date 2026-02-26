@@ -23,6 +23,14 @@ class ApiScraper:
     def __init__(self, proxy_manager: ProxyManager):
         self.proxy_manager = proxy_manager
 
+    @staticmethod
+    def _client_kwargs_for_proxy(proxy_url: str) -> dict:
+        """
+        Build kwargs compatible with modern httpx versions.
+        `proxy` is supported in current releases; `proxies` support can be restored if needed.
+        """
+        return {"proxy": proxy_url, "timeout": 15}
+
     async def get(self, url: str, headers: Optional[Dict] = None) -> Optional[Dict]:
         """
         Performs a GET request to an API endpoint with proxy rotation and block detection.
@@ -37,10 +45,8 @@ class ApiScraper:
             logger.error("No available proxies to make a request.")
             return None
         
-        proxies = {"http://": proxy_url, "https://": proxy_url}
-
         try:
-            async with httpx.AsyncClient(proxies=proxies, timeout=15) as client:
+            async with httpx.AsyncClient(**self._client_kwargs_for_proxy(proxy_url)) as client:
                 response = await client.get(url, headers=request_headers)
 
             # --- Block Detection ---
@@ -50,6 +56,8 @@ class ApiScraper:
                 logger.warning(f"Block detected for proxy {proxy_url} on {url}. Type: {block_type.name}")
                 self.proxy_manager.record_failure(proxy_url)
                 return None # Signal failure
+
+            response.raise_for_status()
 
             # --- Success ---
             self.proxy_manager.record_success(proxy_url)
@@ -62,6 +70,10 @@ class ApiScraper:
             return None
         except httpx.RequestError as e:
             logger.error(f"Request Error with proxy {proxy_url} for {url}: {e}")
+            self.proxy_manager.record_failure(proxy_url)
+            return None
+        except ValueError as e:
+            logger.error(f"Invalid JSON response for {url} with proxy {proxy_url}: {e}")
             self.proxy_manager.record_failure(proxy_url)
             return None
         except Exception as e:

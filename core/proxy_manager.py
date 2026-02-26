@@ -2,6 +2,7 @@ import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Optional
 
 from logger import get_logger
 
@@ -29,6 +30,8 @@ class ProxyManager:
         self.proxies: list[Proxy] = self._load_proxies()
         self.cooldown_period = timedelta(seconds=cooldown_period_seconds)
         self.health_threshold = health_threshold
+        if not self.proxies:
+            raise RuntimeError("PROXY_URLS is required. Refusing to run without proxies to avoid exposing the host IP.")
 
     def _load_proxies(self) -> list[Proxy]:
         """Loads proxies from the PROXY_URLS environment variable."""
@@ -37,7 +40,7 @@ class ProxyManager:
             logger.critical("No PROXY_URLS environment variable found. Proxy Manager cannot operate.")
             return []
         
-        urls = [url.strip() for url in proxy_urls_str.split(',')]
+        urls = [url.strip() for url in proxy_urls_str.split(',') if url.strip()]
         logger.info(f"Loaded {len(urls)} proxies.")
         return [Proxy(url=url) for url in urls]
 
@@ -82,9 +85,9 @@ class ProxyManager:
         proxy = self._find_proxy(proxy_url)
         if proxy:
             proxy.failure_count += 1
-            proxy.health_score -= 10 # Penalize heavily for a failure
+            proxy.health_score = max(0, proxy.health_score - 10) # Penalize heavily for a failure
 
-            if proxy.health_score < self.health_threshold:
+            if proxy.health_score < self.health_threshold and not proxy.is_cooling_down:
                 self._start_cooldown(proxy)
 
     def _find_proxy(self, proxy_url: str) -> Optional[Proxy]:

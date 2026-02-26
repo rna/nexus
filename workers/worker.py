@@ -1,6 +1,6 @@
 import asyncio
-
-from playwright.async_api import async_playwright
+import os
+from typing import Optional
 
 from core.api_scraper import ApiScraper
 from core.proxy_manager import ProxyManager
@@ -8,10 +8,11 @@ from core.rate_controller import AdaptiveRateController
 from core.normalizer import normalize_product_data
 from models import create_db_and_tables, upsert_products, engine
 from sqlmodel.ext.asyncio.session import AsyncSession
-from tasks import get_url_for_processing, mark_url_as_done, push_to_dlq, r, SEEN_URLS_SET, push_urls_to_queue
+from tasks import get_url_for_processing, mark_url_as_done, push_to_dlq, requeue_inflight_urls
 from logger import get_logger
 
 logger = get_logger(__name__)
+POLL_INTERVAL_SECONDS = int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5"))
 
 async def process_batch(api_scraper: ApiScraper, urls: list[str]):
     """
@@ -49,6 +50,10 @@ async def main():
     
     await create_db_and_tables()
     
+    recovered = requeue_inflight_urls()
+    if recovered:
+        logger.info("Recovered %s URLs left in processing queue from a previous run.", recovered)
+
     proxy_manager = ProxyManager()
     rate_controller = AdaptiveRateController()
     api_scraper = ApiScraper(proxy_manager)
@@ -64,8 +69,7 @@ async def main():
         try:
             url = get_url_for_processing()
             if not url:
-                rate_controller.release() # Release if no work to do
-                await asyncio.sleep(5)
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
             logger.info(f"Processing URL: {url}")
@@ -78,23 +82,16 @@ async def main():
                 async with AsyncSession(engine) as session:
                     await upsert_products(session, [normalized_data])
                 rate_controller.record_success()
+                mark_url_as_done(url)
                 logger.info(f"Successfully processed and saved {normalized_data.get('product_name')}")
             else:
                 rate_controller.record_failure()
                 logger.error(f"Failed to process {url}. Moving to DLQ.")
                 push_to_dlq(url)
-                
-            mark_url_as_done(url)
 
         finally:
             rate_controller.release()
 
 
 if __name__ == "__main__":
-    # A separate script should be responsible for populating the queue.
-    # This is for testing purposes only.
-    if r.scard(SEEN_URLS_SET) == 0:
-         logger.info("Queue is empty. Seeding with a test URL.")
-         push_urls_to_queue(["https://www.sephora.com/api/products/P427417"]) # Using a hypothetical API endpoint
-    
     asyncio.run(main())
