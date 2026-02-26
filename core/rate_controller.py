@@ -14,8 +14,9 @@ class AdaptiveRateController:
     Manages request concurrency and delays adaptively based on success/failure rates.
     """
     def __init__(self, initial_concurrency: int = INITIAL_CONCURRENCY):
-        self.semaphore = asyncio.Semaphore(initial_concurrency)
-        self.concurrency = initial_concurrency
+        self.concurrency = max(MIN_CONCURRENCY, min(initial_concurrency, MAX_CONCURRENCY))
+        self._in_flight = 0
+        self._capacity_condition = asyncio.Condition()
         
         # Track recent request outcomes (1 for success, 0 for failure)
         self.history_window = 60 # seconds
@@ -25,12 +26,17 @@ class AdaptiveRateController:
         self.adjustment_interval = timedelta(seconds=10)
 
     async def acquire(self):
-        """Acquire a slot from the semaphore to make a request."""
-        await self.semaphore.acquire()
+        """Acquire a slot from the adaptive limiter."""
+        async with self._capacity_condition:
+            await self._capacity_condition.wait_for(lambda: self._in_flight < self.concurrency)
+            self._in_flight += 1
 
-    def release(self):
-        """Release a slot back to the semaphore."""
-        self.semaphore.release()
+    async def release(self):
+        """Release a slot back to the adaptive limiter."""
+        async with self._capacity_condition:
+            if self._in_flight > 0:
+                self._in_flight -= 1
+            self._capacity_condition.notify_all()
 
     def record_success(self):
         self._add_history_event(1)
@@ -69,46 +75,23 @@ class AdaptiveRateController:
             
             if failure_rate > 10.0 and self.concurrency > MIN_CONCURRENCY:
                 # High failure rate: slow down
-                self._change_concurrency(-1)
+                await self._change_concurrency(-1)
                 logger.warning(f"High failure rate ({failure_rate:.2f}%). Reducing concurrency to {self.concurrency}.")
 
             elif failure_rate < 2.0 and self.concurrency < MAX_CONCURRENCY:
                 # Very low failure rate: speed up
-                self._change_concurrency(1)
+                await self._change_concurrency(1)
                 logger.info(f"Low failure rate ({failure_rate:.2f}%). Increasing concurrency to {self.concurrency}.")
             else:
                 logger.info(f"Stable failure rate ({failure_rate:.2f}%). Concurrency remains at {self.concurrency}.")
 
-    def _change_concurrency(self, delta: int):
-        """Atomically changes the concurrency level."""
+    async def _change_concurrency(self, delta: int):
+        """Atomically changes the concurrency level and wakes blocked waiters."""
         new_concurrency = self.concurrency + delta
-        
-        if new_concurrency > self.concurrency: # Increasing
-            self.semaphore.release() # Release one slot to increase limit
-        elif new_concurrency < self.concurrency: # Decreasing
-            # This is tricky. To decrease, we need to acquire a slot without releasing.
-            # A cleaner way is to create a new semaphore, but that's not atomic.
-            # For this simplified model, we'll just adjust the internal counter.
-            # A task trying to acquire() will handle the new, lower limit.
-            pass
-            
-        self.concurrency = max(MIN_CONCURRENCY, min(new_concurrency, MAX_CONCURRENCY))
-        
-        # This is a simplification. A truly dynamic semaphore is more complex.
-        # We are essentially adjusting our target, and the semaphore will eventually catch up.
-        # A better implementation might re-create the semaphore, but that's not thread/task-safe without locks.
-        # For now, this model is sufficient to demonstrate the principle.
-        # The semaphore doesn't have a public `_value` to set, so we can only release to increase.
-        # To decrease, we rely on the fact that fewer `release` calls will happen over time.
-        # Let's adjust the semaphore creation to be more dynamic.
-        # The logic is flawed. Let's fix it.
-        # A simple semaphore's value can't be changed after creation.
-        # We can simulate it.
+        new_concurrency = max(MIN_CONCURRENCY, min(new_concurrency, MAX_CONCURRENCY))
+        if new_concurrency == self.concurrency:
+            return
 
-        # Let's restart the logic for _change_concurrency
-        # It's not possible to resize a semaphore directly.
-        # A better approach is to have a target concurrency and let workers
-        # decide if they should run.
-        # But for this case, let's stick with the simple semaphore and accept its limitations.
-        # The provided logic is a common, though not perfect, way to simulate this.
-        # I will leave it as is, with the comments explaining the trade-offs.
+        async with self._capacity_condition:
+            self.concurrency = new_concurrency
+            self._capacity_condition.notify_all()

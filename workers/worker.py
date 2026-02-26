@@ -90,7 +90,7 @@ async def main():
                 push_to_dlq(url)
 
         finally:
-            rate_controller.release()
+            await rate_controller.release()
 
 
 if __name__ == "__main__":
